@@ -7,9 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from psycopg import Error as PsycopgError
 from psycopg_pool import PoolTimeout
 import routes_auth
-import routes_admin 
+import routes_admin
+import routes_student
+import routes_teacher
+
 
 from db import pool, with_db_context
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -70,3 +75,5 @@ async def psycopg_error_handler(request, exc: PsycopgError):
 
 app.include_router(routes_auth.router)
 app.include_router(routes_admin.router)
+app.include_router(routes_student.router)
+app.include_router(routes_teacher.router)
