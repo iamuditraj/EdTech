@@ -5,4 +5,5 @@ psycopg-pool
 pydantic
 pytest
 httpx
-
+bcrypt
+PyJWT

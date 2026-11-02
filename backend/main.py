@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg import Error as PsycopgError
 from psycopg_pool import PoolTimeout
+import routes_auth
 
 from db import pool, with_db_context
 
@@ -65,9 +66,5 @@ async def psycopg_error_handler(request, exc: PsycopgError):
         
     logger.exception("Database error")
     return JSONResponse(status_code=500, content={"detail": "Internal server error."})
-
-@app.get("/api/schools")
-def get_schools():
-    with with_db_context("auth_role") as cur:
-        # fetchall() on a dict_row cursor returns a list of dicts directly
-        return cur.execute("SELECT id, name FROM schools ORDER BY name").fetchall()
+    
+app.include_router(routes_auth.router)
