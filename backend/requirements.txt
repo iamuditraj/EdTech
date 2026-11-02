@@ -3,4 +3,6 @@ uvicorn
 psycopg[binary]
 psycopg-pool
 pydantic
+pytest
+httpx
 
