@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from psycopg import Error as PsycopgError
 from psycopg_pool import PoolTimeout
 import routes_auth
+import routes_admin 
 
 from db import pool, with_db_context
 
@@ -66,5 +67,6 @@ async def psycopg_error_handler(request, exc: PsycopgError):
         
     logger.exception("Database error")
     return JSONResponse(status_code=500, content={"detail": "Internal server error."})
-    
+
 app.include_router(routes_auth.router)
+app.include_router(routes_admin.router)
