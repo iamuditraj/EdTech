@@ -8,3 +8,4 @@ httpx
 bcrypt
 PyJWT
 python-multipart
+python-dotenv
