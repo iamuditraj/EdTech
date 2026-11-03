@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -16,7 +16,7 @@ router = APIRouter()
 class StudentLogin(BaseModel):
     school_id: UUID
     registration_number: str
-    dob: date
+    dob: str
 
 class TeacherLogin(BaseModel):
     school_id: UUID
@@ -39,7 +39,19 @@ def student_login(req: StudentLogin):
     reg_no = req.registration_number.strip()
     key = f"student:{req.school_id}:{reg_no}"
     check_rate_limit(key)
-    
+
+    dob_str = req.dob.strip()
+    parsed_dob = None
+    if len(dob_str) == 8 and dob_str.isdigit():
+        try:
+            parsed_dob = datetime.strptime(dob_str, "%d%m%Y").date()
+        except ValueError:
+            pass
+
+    if not parsed_dob:
+        record_failure(key)
+        raise HTTPException(401, "Invalid credentials")
+
     with with_db_context("auth_role") as cur:
         row = cur.execute("""
             SELECT st.id, st.full_name, st.registration_number, st.school_id, st.class_id,
@@ -50,14 +62,14 @@ def student_login(req: StudentLogin):
             JOIN classes c ON c.id = st.class_id
             JOIN subscriptions sub ON sub.school_id = st.school_id AND sub.class_id = st.class_id
             WHERE st.school_id = %s AND st.registration_number = %s AND st.dob = %s
-        """, (str(req.school_id), reg_no, req.dob)).fetchone()
-        
+        """, (str(req.school_id), reg_no, parsed_dob)).fetchone()
+
     if not row:
         record_failure(key)
         raise HTTPException(401, "Invalid credentials")
     if not row["active"]:
         raise HTTPException(403, "Subscription for this class is not active or has expired.")
-        
+
     clear_failures(key)
     return {"token": create_token({
         "role": "student", "user_id": str(row["id"]), "school_id": str(row["school_id"]), 
@@ -70,7 +82,7 @@ def student_login(req: StudentLogin):
 def teacher_login(req: TeacherLogin):
     key = f"teacher:{req.school_id}:{req.username}"
     check_rate_limit(key)
-    
+
     with with_db_context("auth_role") as cur:
         row = cur.execute("""
             SELECT t.id, t.full_name, t.username, t.school_id, t.class_id, t.password_hash,
@@ -88,7 +100,7 @@ def teacher_login(req: TeacherLogin):
         raise HTTPException(401, "Invalid credentials")
     if not row["active"]:
         raise HTTPException(403, "Subscription for this class is not active or has expired.")
-        
+
     clear_failures(key)
     return {"token": create_token({
         "role": "teacher", "user_id": str(row["id"]), "school_id": str(row["school_id"]), 
@@ -101,7 +113,7 @@ def teacher_login(req: TeacherLogin):
 def admin_login(req: AdminLogin):
     key = f"admin:{req.username}"
     check_rate_limit(key)
-    
+
     with with_db_context("auth_role") as cur:
         row = cur.execute(
             "SELECT id, username, password_hash FROM platform_admins WHERE username = %s", 
@@ -111,7 +123,7 @@ def admin_login(req: AdminLogin):
     if not row or not verify_password(req.password, row["password_hash"]):
         record_failure(key)
         raise HTTPException(401, "Invalid credentials")
-        
+
     clear_failures(key)
     return {"token": create_token({
         "role": "admin", "user_id": str(row["id"]), "school_id": None, 
