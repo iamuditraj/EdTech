@@ -16,7 +16,11 @@ def get_dashboard(user: dict = teacher_auth):
                    v.id AS video_id, v.title,
                    COALESCE(vp.status::text, 'not_started') AS status,
                    COALESCE(vp.watch_duration_seconds, 0) AS watch_duration_seconds,
-                   COALESCE(vp.last_position_seconds, 0) AS last_position_seconds
+                   COALESCE(vp.last_position_seconds, 0) AS last_position_seconds,
+                   vp.quiz_score,
+                   vp.quiz_total,
+                   vp.quiz_answers,
+                   COALESCE(v.mcqs, '[]'::jsonb) AS mcqs
             FROM students s
             CROSS JOIN videos v
             LEFT JOIN video_progress vp ON vp.student_id = s.id AND vp.video_id = v.id
