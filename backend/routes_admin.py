@@ -44,7 +44,7 @@ class McqItem(BaseModel):
     @model_validator(mode="after")
     def check_index(self):
         if self.correct_index >= len(self.options):
-            raise ValueError("correct_index out of range.")
+            raise ValueError("correct_index out of range")
         return self
 
 class VideoCreate(BaseModel):
@@ -197,22 +197,21 @@ def upsert_subscription(req: SubscriptionUpsert):
 def get_videos():
     with with_db_context("admin_role") as cur:
         rows = cur.execute(
-            "SELECT id, class_id, title, video_url, total_duration_seconds, completion_threshold_pct, "
-            "notes_url, COALESCE(mcqs, '[]'::jsonb) AS mcqs "
+            "SELECT id, class_id, title, video_url, total_duration_seconds, completion_threshold_pct, notes_url, mcqs "
             "FROM videos ORDER BY class_id, title"
         ).fetchall()
     return rows
 
 @router.post("/videos")
 def create_video(req: VideoCreate):
-    mcqs_data = json.dumps([m.model_dump() for m in req.mcqs])
-    notes_val = req.notes_url.strip() if req.notes_url else None
+    mcqs_json = json.dumps([m.model_dump() for m in req.mcqs])
     with with_db_context("admin_role") as cur:
         row = cur.execute("""
             INSERT INTO videos (class_id, title, video_url, total_duration_seconds, completion_threshold_pct, notes_url, mcqs)
-            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id, class_id, title, video_url, total_duration_seconds, completion_threshold_pct, notes_url, mcqs
-        """, (req.class_id, req.title.strip(), req.video_url.strip(), req.total_duration_seconds, req.completion_threshold_pct, notes_val, mcqs_data)).fetchone()
+        """, (req.class_id, req.title.strip(), req.video_url.strip(), req.total_duration_seconds, req.completion_threshold_pct,
+              req.notes_url.strip() if req.notes_url else None, mcqs_json)).fetchone()
     return row
 
 @router.delete("/videos/{video_id}")

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useFetch, ErrorBanner, Header } from "./ui";
-import type { TeacherDashboardRow, VideoStatus } from "./types";
+import type { TeacherDashboardRow, VideoStatus, McqItem } from "./types";
 
 // --- Status badge (same styles as Student) ---
 
@@ -22,9 +22,41 @@ function formatTime(seconds: number): string {
     return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+function QuizReviewModal({ mcqs, answers, score, total, onClose }: {
+    mcqs: McqItem[]; answers: number[]; score: number; total: number; onClose: () => void;
+}) {
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+            <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-5 space-y-3" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-slate-900">Quiz Review — {score}/{total}</h3>
+                    <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+                </div>
+                {mcqs.map((m, i) => {
+                    const selected = answers[i];
+                    return (
+                        <div key={i} className="rounded border p-3 space-y-1">
+                            <p className="text-sm font-medium text-slate-900">Q{i + 1}. {m.question}</p>
+                            {m.options.map((opt, oi) => {
+                                const isCorrect = oi === m.correct_index;
+                                const isPicked = oi === selected;
+                                let cls = "text-sm px-2 py-0.5 rounded ";
+                                if (isCorrect) cls += "bg-green-100 text-green-800 font-medium";
+                                else if (isPicked) cls += "bg-red-100 text-red-800";
+                                else cls += "text-slate-600";
+                                return <div key={oi} className={cls}>{isCorrect && "✅ "}{isPicked && !isCorrect && "❌ "}{opt}</div>;
+                            })}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
 export function TeacherDashboard() {
     const { data: rows, loading, error } = useFetch<TeacherDashboardRow[]>("/api/teacher/dashboard");
-    const [reviewCell, setReviewCell] = useState<{ studentName: string; videoTitle: string; cell: TeacherDashboardRow } | null>(null);
+    const [reviewCell, setReviewCell] = useState<TeacherDashboardRow | null>(null);
 
     // Pivot: unique students as rows, unique videos as columns
     const students: { id: string; name: string; regno: string }[] = [];
@@ -104,20 +136,14 @@ export function TeacherDashboard() {
                                                         <div className="mt-0.5 text-xs text-slate-500">
                                                             {formatTime(cell.watch_duration_seconds)}
                                                         </div>
-                                                        {cell.quiz_score !== null && cell.quiz_score !== undefined ? (
+                                                        {cell.quiz_score !== null && (
                                                             <button
-                                                                type="button"
-                                                                onClick={() => setReviewCell({ studentName: s.name, videoTitle: v.title, cell })}
-                                                                className="mt-1 block text-xs font-semibold text-purple-700 hover:underline"
-                                                                title="Click to view question-by-question student answers"
+                                                                className="mt-0.5 text-xs font-medium text-indigo-600 hover:underline"
+                                                                onClick={() => setReviewCell(cell)}
                                                             >
-                                                                Quiz: {cell.quiz_score}/{cell.quiz_total} ↗
+                                                                Quiz: {cell.quiz_score}/{cell.quiz_total}
                                                             </button>
-                                                        ) : cell.mcqs && cell.mcqs.length > 0 ? (
-                                                            <div className="mt-1 text-[11px] text-slate-400">
-                                                                Quiz: —
-                                                            </div>
-                                                        ) : null}
+                                                        )}
                                                     </td>
                                                 );
                                             })}
@@ -131,110 +157,17 @@ export function TeacherDashboard() {
                         </table>
                     </div>
                 )}
-
-                {/* Question-by-question Quiz Review Modal for Teacher */}
-                {reviewCell && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-                        <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-6 shadow-xl">
-                            <div className="flex items-start justify-between border-b pb-3">
-                                <div>
-                                    <h2 className="text-base font-bold text-slate-900">Quiz Answers Review</h2>
-                                    <p className="text-xs text-slate-600 mt-0.5">
-                                        Student: <span className="font-semibold text-slate-800">{reviewCell.studentName}</span> · Video: <span className="font-semibold text-slate-800">{reviewCell.videoTitle}</span>
-                                    </p>
-                                    <p className="mt-1 text-xs font-semibold text-purple-700">
-                                        Score: {reviewCell.cell.quiz_score} / {reviewCell.cell.quiz_total} ({Math.round(((reviewCell.cell.quiz_score ?? 0) / (reviewCell.cell.quiz_total || 1)) * 100)}%)
-                                    </p>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setReviewCell(null)}
-                                    className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-sm"
-                                >
-                                    ✕
-                                </button>
-                            </div>
-
-                            <div className="mt-4 space-y-4">
-                                {reviewCell.cell.mcqs && reviewCell.cell.mcqs.length > 0 ? (
-                                    reviewCell.cell.mcqs.map((q, qIdx) => {
-                                        const studentAns = reviewCell.cell.quiz_answers?.[qIdx];
-                                        const isCorrect = studentAns === q.correct_index;
-
-                                        return (
-                                            <div
-                                                key={qIdx}
-                                                className={`rounded border p-3 ${
-                                                    isCorrect ? "border-green-300 bg-green-50/40" : "border-red-300 bg-red-50/40"
-                                                }`}
-                                            >
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-xs font-semibold text-slate-600">Question {qIdx + 1}</span>
-                                                    <span
-                                                        className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-                                                            isCorrect ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
-                                                        }`}
-                                                    >
-                                                        {isCorrect ? "✓ Correct" : "✗ Wrong"}
-                                                    </span>
-                                                </div>
-                                                <p className="mt-1 text-sm font-medium text-slate-900">{q.question}</p>
-
-                                                <div className="mt-2 space-y-1.5 text-xs">
-                                                    {q.options.map((opt, optIdx) => {
-                                                        const isStudentPick = studentAns === optIdx;
-                                                        const isKey = q.correct_index === optIdx;
-
-                                                        let style = "border-slate-200 bg-white text-slate-600";
-                                                        let badge = null;
-
-                                                        if (isKey && isStudentPick) {
-                                                            style = "border-green-500 bg-green-100 font-semibold text-green-900";
-                                                            badge = "✓ Student Answer (Correct)";
-                                                        } else if (isKey) {
-                                                            style = "border-green-500 bg-green-50 font-semibold text-green-900";
-                                                            badge = "✓ Correct Answer";
-                                                        } else if (isStudentPick) {
-                                                            style = "border-red-500 bg-red-100 font-semibold text-red-900";
-                                                            badge = "✗ Student Answer (Wrong)";
-                                                        }
-
-                                                        return (
-                                                            <div
-                                                                key={optIdx}
-                                                                className={`flex items-center justify-between rounded border p-2 ${style}`}
-                                                            >
-                                                                <span>{opt}</span>
-                                                                {badge && (
-                                                                    <span className="ml-2 text-[11px] font-medium opacity-90">
-                                                                        {badge}
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-                                        );
-                                    })
-                                ) : (
-                                    <p className="text-xs text-slate-500">No question details available.</p>
-                                )}
-                            </div>
-
-                            <div className="mt-6 flex justify-end border-t pt-3">
-                                <button
-                                    type="button"
-                                    onClick={() => setReviewCell(null)}
-                                    className="rounded bg-slate-800 px-4 py-1.5 text-xs font-medium text-white hover:bg-slate-700"
-                                >
-                                    Close
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
             </main>
+
+            {reviewCell && reviewCell.quiz_answers && (
+                <QuizReviewModal
+                    mcqs={reviewCell.mcqs}
+                    answers={reviewCell.quiz_answers}
+                    score={reviewCell.quiz_score!}
+                    total={reviewCell.quiz_total!}
+                    onClose={() => setReviewCell(null)}
+                />
+            )}
         </>
     );
 }

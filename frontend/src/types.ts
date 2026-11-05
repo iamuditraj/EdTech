@@ -64,7 +64,7 @@ export interface McqItem {
     question: string;
     options: string[];
     correct_index?: number;
-    selected_index?: number | null;
+    selected_index?: number;
 }
 
 export interface AdminVideo {
@@ -74,8 +74,8 @@ export interface AdminVideo {
     video_url: string;
     total_duration_seconds: number;
     completion_threshold_pct: number;
-    notes_url?: string | null;
-    mcqs?: McqItem[];
+    notes_url: string | null;
+    mcqs: McqItem[];
 }
 
 export interface Teacher {
@@ -123,23 +123,17 @@ export interface StudentVideo {
     status: VideoStatus;
     watch_duration_seconds: number;
     last_position_seconds: number;
-    notes_url?: string | null;
+    notes_url: string | null;
     mcqs: McqItem[];
-    quiz_score?: number | null;
-    quiz_total?: number | null;
-    quiz_answers?: number[] | null;
+    quiz_score: number | null;
+    quiz_total: number | null;
+    quiz_answers: number[] | null;
 }
 
 export interface ProgressResponse {
     status: VideoStatus;
     watch_duration_seconds: number;
     last_position_seconds: number;
-}
-
-export interface QuizSubmitResponse {
-    quiz_score: number;
-    quiz_total: number;
-    quiz_answers: number[];
 }
 
 export interface TeacherDashboardRow {
@@ -151,8 +145,13 @@ export interface TeacherDashboardRow {
     status: VideoStatus;
     watch_duration_seconds: number;
     last_position_seconds: number;
-    quiz_score?: number | null;
-    quiz_total?: number | null;
-    quiz_answers?: number[] | null;
-    mcqs?: McqItem[];
+    quiz_score: number | null;
+    quiz_total: number | null;
+    quiz_answers: number[] | null;
+    mcqs: McqItem[];
+}
+
+export interface QuizSubmitResponse {
+    quiz_score: number;
+    quiz_total: number;
 }

@@ -13,14 +13,11 @@ def get_dashboard(user: dict = teacher_auth):
     with with_db_context("teacher_role", user) as cur:
         rows = cur.execute("""
             SELECT s.id AS student_id, s.registration_number, s.full_name,
-                   v.id AS video_id, v.title,
+                   v.id AS video_id, v.title, v.mcqs,
                    COALESCE(vp.status::text, 'not_started') AS status,
                    COALESCE(vp.watch_duration_seconds, 0) AS watch_duration_seconds,
                    COALESCE(vp.last_position_seconds, 0) AS last_position_seconds,
-                   vp.quiz_score,
-                   vp.quiz_total,
-                   vp.quiz_answers,
-                   COALESCE(v.mcqs, '[]'::jsonb) AS mcqs
+                   vp.quiz_score, vp.quiz_total, vp.quiz_answers
             FROM students s
             CROSS JOIN videos v
             LEFT JOIN video_progress vp ON vp.student_id = s.id AND vp.video_id = v.id

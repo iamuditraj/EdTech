@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "./api";
 import { useFetch, ErrorBanner, Header } from "./ui";
-import type { StudentVideo, ProgressResponse, VideoStatus, QuizSubmitResponse } from "./types";
+import type { StudentVideo, ProgressResponse, VideoStatus, McqItem, QuizSubmitResponse } from "./types";
 
 // --- Status badge ---
 
@@ -69,6 +69,9 @@ export function StudentVideoList() {
                                 <p className="mt-1 text-xs text-slate-500">
                                     {pct}% watched · Complete at {v.completion_threshold_pct}%
                                 </p>
+                                {v.quiz_score !== null && (
+                                    <p className="mt-1 text-xs font-medium text-indigo-600">Quiz: {v.quiz_score}/{v.quiz_total}</p>
+                                )}
                             </Link>
                         );
                     })}
@@ -101,36 +104,63 @@ export function StudentVideoPlayer() {
                     </div>
                 )}
 
-                {video && <Player video={video} onQuizComplete={reload} />}
+                {video && <Player video={video} onQuizSubmit={reload} />}
             </main>
         </>
     );
 }
 
-// --- Player with heartbeat, notes & quiz ---
+// --- Quiz Review (shared between student and after-submit) ---
 
-function Player({ video, onQuizComplete }: { video: StudentVideo; onQuizComplete: () => void }) {
+function QuizReview({ mcqs }: { mcqs: McqItem[] }) {
+    return (
+        <div className="space-y-3">
+            {mcqs.map((m, i) => {
+                const correct = m.correct_index;
+                const selected = m.selected_index;
+                return (
+                    <div key={i} className="rounded border p-3 bg-white">
+                        <p className="text-sm font-medium text-slate-900">Q{i + 1}. {m.question}</p>
+                        <div className="mt-2 space-y-1">
+                            {m.options.map((opt, oi) => {
+                                const isCorrect = oi === correct;
+                                const isSelected = oi === selected;
+                                let cls = "text-sm px-2 py-1 rounded ";
+                                if (isCorrect) cls += "bg-green-100 text-green-800 font-medium";
+                                else if (isSelected && !isCorrect) cls += "bg-red-100 text-red-800";
+                                else cls += "text-slate-600";
+                                return (
+                                    <div key={oi} className={cls}>
+                                        {isCorrect && "✅ "}{isSelected && !isCorrect && "❌ "}{opt}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+// --- Player with heartbeat ---
+
+function Player({ video, onQuizSubmit }: { video: StudentVideo; onQuizSubmit: () => void }) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const watchRef = useRef(video.watch_duration_seconds);
     const lastTRef = useRef<number | null>(null);
     const intervalRef = useRef<number | null>(null);
 
     const [status, setStatus] = useState<VideoStatus>(video.status);
-    const [quizScore, setQuizScore] = useState<number | null>(video.quiz_score ?? null);
-    const [quizTotal, setQuizTotal] = useState<number | null>(video.quiz_total ?? null);
-    const [quizAnswers, setQuizAnswers] = useState<number[] | null>(video.quiz_answers ?? null);
     const [showQuiz, setShowQuiz] = useState(false);
-    const [userAnswers, setUserAnswers] = useState<Record<number, number>>({});
-    const [quizSubmitting, setQuizSubmitting] = useState(false);
+    const [quizScore, setQuizScore] = useState<number | null>(video.quiz_score);
+    const [quizTotal, setQuizTotal] = useState<number | null>(video.quiz_total);
+    const [answers, setAnswers] = useState<(number | null)[]>(() => new Array(video.mcqs.length).fill(null));
     const [quizError, setQuizError] = useState<string | null>(null);
+    const [quizBusy, setQuizBusy] = useState(false);
 
-    // Keep state in sync if video prop changes
-    useEffect(() => {
-        setStatus(video.status);
-        setQuizScore(video.quiz_score ?? null);
-        setQuizTotal(video.quiz_total ?? null);
-        setQuizAnswers(video.quiz_answers ?? null);
-    }, [video]);
+    const attempted = quizScore !== null;
+    const hasMcqs = video.mcqs.length > 0;
 
     // Send heartbeat — silent on failure (401 still triggers logout via api.ts)
     const sendHeartbeat = useCallback(() => {
@@ -154,12 +184,13 @@ function Player({ video, onQuizComplete }: { video: StudentVideo; onQuizComplete
     const handleLoadedMetadata = useCallback(() => {
         const el = videoRef.current;
         if (!el) return;
+        // If near the end, start from 0 (so a finished video doesn't end instantly on replay)
         if (video.last_position_seconds < video.total_duration_seconds - 2) {
             el.currentTime = video.last_position_seconds;
         }
     }, [video.last_position_seconds, video.total_duration_seconds]);
 
-    // Count watched time by media-time deltas
+    // Count watched time by media-time deltas (from plan Section 7)
     const handleTimeUpdate = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
         const t = e.currentTarget.currentTime;
         if (lastTRef.current !== null) {
@@ -175,6 +206,7 @@ function Player({ video, onQuizComplete }: { video: StudentVideo; onQuizComplete
         lastTRef.current = null;
     }, []);
 
+    // Start 15s interval on play, clear on pause
     const handlePlay = useCallback(() => {
         if (intervalRef.current !== null) return;
         intervalRef.current = window.setInterval(sendHeartbeat, 15_000);
@@ -197,9 +229,11 @@ function Player({ video, onQuizComplete }: { video: StudentVideo; onQuizComplete
         sendHeartbeat();
     }, [clearInterval_, sendHeartbeat]);
 
+    // Cleanup on unmount (route change)
     useEffect(() => {
         return () => {
             if (intervalRef.current !== null) window.clearInterval(intervalRef.current);
+            // Fire one last heartbeat on unmount
             const el = videoRef.current;
             if (el) {
                 api<ProgressResponse>(`/api/student/videos/${video.id}/progress`, {
@@ -213,43 +247,31 @@ function Player({ video, onQuizComplete }: { video: StudentVideo; onQuizComplete
         };
     }, [video.id]);
 
-    async function handleQuizSubmit(e: React.FormEvent) {
-        e.preventDefault();
-        setQuizSubmitting(true);
-        setQuizError(null);
-
-        const answersList = video.mcqs.map((_, i) => userAnswers[i]);
-        if (answersList.some((a) => a === undefined)) {
-            setQuizError("Please answer every question before submitting.");
-            setQuizSubmitting(false);
+    async function submitQuiz() {
+        if (answers.some(a => a === null)) {
+            setQuizError("Please answer all questions.");
             return;
         }
-
+        setQuizBusy(true);
+        setQuizError(null);
         try {
             const res = await api<QuizSubmitResponse>(`/api/student/videos/${video.id}/quiz`, {
                 method: "POST",
-                body: { answers: answersList },
+                body: { answers },
             });
             setQuizScore(res.quiz_score);
             setQuizTotal(res.quiz_total);
-            setQuizAnswers(res.quiz_answers);
-            if (status === "not_started") {
-                setStatus("in_progress");
-            }
-            onQuizComplete();
+            onQuizSubmit(); // reload video list to get correct_index in mcqs for review
         } catch (err: any) {
-            setQuizError(err.message ?? "Failed to submit quiz.");
+            setQuizError(err.message ?? "Failed to submit quiz");
         } finally {
-            setQuizSubmitting(false);
+            setQuizBusy(false);
         }
     }
 
     const pct = video.total_duration_seconds > 0
         ? Math.min(100, Math.round((watchRef.current / video.total_duration_seconds) * 100))
         : 0;
-
-    const hasAttempted = quizScore !== null;
-    const hasMcqs = video.mcqs && video.mcqs.length > 0;
 
     return (
         <div>
@@ -264,7 +286,7 @@ function Player({ video, onQuizComplete }: { video: StudentVideo; onQuizComplete
                 ref={videoRef}
                 src={video.video_url}
                 controls
-                className="mt-4 w-full rounded bg-black shadow"
+                className="mt-4 w-full rounded bg-black"
                 onLoadedMetadata={handleLoadedMetadata}
                 onTimeUpdate={handleTimeUpdate}
                 onSeeking={handleSeeking}
@@ -273,165 +295,70 @@ function Player({ video, onQuizComplete }: { video: StudentVideo; onQuizComplete
                 onEnded={handleEnded}
             />
 
-            {/* Action Bar below Video */}
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                    {video.notes_url && (
-                        <a
-                            href={video.notes_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                        >
-                            📄 Download Notes
-                        </a>
-                    )}
-
-                    {hasMcqs && (
-                        <button
-                            type="button"
-                            onClick={() => setShowQuiz((prev) => !prev)}
-                            className="inline-flex items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
-                        >
-                            📝 {hasAttempted ? (showQuiz ? "Hide Quiz Review" : "Review Quiz") : (showQuiz ? "Hide Test" : "Take Test")}
+            {/* Action bar */}
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+                {video.notes_url && (
+                    <a href={video.notes_url} target="_blank" rel="noreferrer"
+                       className="inline-flex items-center gap-1 rounded bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200">
+                        📄 Download Notes
+                    </a>
+                )}
+                {hasMcqs && !attempted && (
+                    <button onClick={() => setShowQuiz(prev => !prev)}
+                            className="inline-flex items-center gap-1 rounded bg-indigo-100 px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-200">
+                        📝 {showQuiz ? "Hide Test" : `Take Test (${video.mcqs.length} Qs)`}
+                    </button>
+                )}
+                {attempted && (
+                    <>
+                        <span className="inline-flex items-center gap-1 rounded bg-green-100 px-3 py-1.5 text-sm font-medium text-green-700">
+                            Quiz: {quizScore}/{quizTotal}
+                        </span>
+                        <button onClick={() => setShowQuiz(prev => !prev)}
+                                className="text-sm text-indigo-600 hover:underline">
+                            {showQuiz ? "Hide Review" : "View Answers"}
                         </button>
-                    )}
-                </div>
-
-                {hasAttempted && (
-                    <span className="inline-flex items-center rounded-full bg-purple-100 px-3 py-1 text-xs font-semibold text-purple-800">
-                        Quiz Score: {quizScore} / {quizTotal}
-                    </span>
+                    </>
                 )}
             </div>
 
-            {/* Quiz Form or Review View */}
+            {/* Quiz section */}
             {showQuiz && hasMcqs && (
-                <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm space-y-4">
-                    <div className="flex items-center justify-between border-b pb-2">
-                        <h2 className="text-base font-semibold text-slate-900">
-                            {hasAttempted ? "Quiz Review" : "Video Quiz"}
-                        </h2>
-                        {hasAttempted && (
-                            <span className="text-xs text-slate-500 font-medium">
-                                Score: {quizScore}/{quizTotal} ({Math.round(((quizScore ?? 0) / (quizTotal || 1)) * 100)}%)
-                            </span>
-                        )}
-                    </div>
-
-                    {quizError && <ErrorBanner message={quizError} />}
-
-                    {!hasAttempted ? (
-                        /* Test Taking Mode */
-                        <form onSubmit={handleQuizSubmit} className="space-y-4">
-                            {video.mcqs.map((q, qIdx) => (
-                                <fieldset key={qIdx} className="rounded border border-slate-200 p-3 bg-slate-50">
-                                    <legend className="px-1 text-xs font-semibold text-slate-700">
-                                        Question {qIdx + 1} of {video.mcqs.length}
-                                    </legend>
-                                    <p className="mt-1 text-sm font-medium text-slate-900">{q.question}</p>
-                                    <div className="mt-2 space-y-1.5">
-                                        {q.options.map((opt, optIdx) => (
-                                            <label
-                                                key={optIdx}
-                                                className={`flex cursor-pointer items-center gap-2 rounded border p-2 text-xs transition-colors ${
-                                                    userAnswers[qIdx] === optIdx
-                                                        ? "border-blue-500 bg-blue-50 font-medium text-blue-900"
-                                                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                                                }`}
-                                            >
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-4">
+                    {attempted ? (
+                        <>
+                            <h2 className="text-sm font-semibold text-slate-900">Quiz Review — {quizScore}/{quizTotal}</h2>
+                            <QuizReview mcqs={video.mcqs} />
+                        </>
+                    ) : (
+                        <>
+                            <h2 className="text-sm font-semibold text-slate-900">Quiz</h2>
+                            {quizError && <ErrorBanner message={quizError} />}
+                            {video.mcqs.map((m, qi) => (
+                                <div key={qi} className="rounded border bg-white p-3 space-y-2">
+                                    <p className="text-sm font-medium text-slate-900">Q{qi + 1}. {m.question}</p>
+                                    <div className="space-y-1">
+                                        {m.options.map((opt, oi) => (
+                                            <label key={oi} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                                                 <input
-                                                    type="radio"
-                                                    name={`q-${qIdx}`}
-                                                    checked={userAnswers[qIdx] === optIdx}
-                                                    onChange={() => setUserAnswers((prev) => ({ ...prev, [qIdx]: optIdx }))}
+                                                    type="radio" name={`quiz-${qi}`}
+                                                    checked={answers[qi] === oi}
+                                                    onChange={() => setAnswers(prev => { const a = [...prev]; a[qi] = oi; return a; })}
                                                 />
-                                                <span>{opt}</span>
+                                                {opt}
                                             </label>
                                         ))}
                                     </div>
-                                </fieldset>
+                                </div>
                             ))}
-
-                            <div className="flex justify-end">
-                                <button
-                                    type="submit"
-                                    disabled={quizSubmitting}
-                                    className="rounded bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-                                >
-                                    {quizSubmitting ? "Submitting…" : "Submit Quiz"}
-                                </button>
-                            </div>
-                        </form>
-                    ) : (
-                        /* Review Mode (Correct vs Wrong Answers) */
-                        <div className="space-y-4">
-                            {video.mcqs.map((q, qIdx) => {
-                                const selected = q.selected_index ?? quizAnswers?.[qIdx];
-                                const correct = q.correct_index;
-                                const isCorrect = selected === correct;
-
-                                return (
-                                    <div
-                                        key={qIdx}
-                                        className={`rounded border p-3 ${
-                                            isCorrect ? "border-green-300 bg-green-50/40" : "border-red-300 bg-red-50/40"
-                                        }`}
-                                    >
-                                        <div className="flex items-center justify-between">
-                                            <span className="text-xs font-semibold text-slate-600">Question {qIdx + 1}</span>
-                                            <span
-                                                className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-                                                    isCorrect ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
-                                                }`}
-                                            >
-                                                {isCorrect ? "✓ Correct" : "✗ Wrong"}
-                                            </span>
-                                        </div>
-                                        <p className="mt-1 text-sm font-medium text-slate-900">{q.question}</p>
-
-                                        <div className="mt-2 space-y-1.5 text-xs">
-                                            {q.options.map((opt, optIdx) => {
-                                                const isThisSelected = selected === optIdx;
-                                                const isThisCorrect = correct === optIdx;
-
-                                                let style = "border-slate-200 bg-white text-slate-600";
-                                                let badge = null;
-
-                                                if (isThisCorrect && isThisSelected) {
-                                                    style = "border-green-500 bg-green-100/70 font-semibold text-green-900";
-                                                    badge = "✓ Your Answer (Correct)";
-                                                } else if (isThisCorrect) {
-                                                    style = "border-green-500 bg-green-50 font-semibold text-green-900";
-                                                    badge = "✓ Correct Answer";
-                                                } else if (isThisSelected) {
-                                                    style = "border-red-500 bg-red-100/70 font-semibold text-red-900";
-                                                    badge = "✗ Your Answer (Wrong)";
-                                                }
-
-                                                return (
-                                                    <div
-                                                        key={optIdx}
-                                                        className={`flex items-center justify-between rounded border p-2 ${style}`}
-                                                    >
-                                                        <span>{opt}</span>
-                                                        {badge && (
-                                                            <span className="ml-2 text-[11px] font-medium opacity-90">
-                                                                {badge}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
+                            <button onClick={submitQuiz} disabled={quizBusy}
+                                    className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-medium disabled:opacity-50">
+                                {quizBusy ? "Submitting…" : "Submit Quiz"}
+                            </button>
+                        </>
                     )}
                 </div>
             )}
         </div>
     );
 }
-
