@@ -198,3 +198,22 @@ CREATE POLICY student_manage_own_progress ON video_progress
     );
 
 COMMIT;
+
+BEGIN;
+
+-- Add notes + mcqs to videos
+ALTER TABLE videos
+  ADD COLUMN notes_url TEXT,
+  ADD COLUMN mcqs JSONB NOT NULL DEFAULT '[]';
+
+-- Add quiz results + student answers to video_progress
+ALTER TABLE video_progress
+  ADD COLUMN quiz_score INT,
+  ADD COLUMN quiz_total INT,
+  ADD COLUMN quiz_answers JSONB;
+  -- NULL = not attempted; quiz_answers stores [0, 2, 1, ...] (selected indices)
+
+-- Let students write quiz results to their own progress rows
+GRANT UPDATE (quiz_score, quiz_total, quiz_answers) ON video_progress TO student_role;
+
+COMMIT;
