@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 from datetime import date, datetime
 from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -35,12 +36,25 @@ class SubscriptionUpsert(BaseModel):
             raise ValueError("end_date must be on or after start_date.")
         return self
 
+class McqItem(BaseModel):
+    question: str = Field(min_length=1)
+    options: list[str] = Field(min_length=2, max_length=6)
+    correct_index: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def check_index(self):
+        if self.correct_index >= len(self.options):
+            raise ValueError("correct_index out of range")
+        return self
+
 class VideoCreate(BaseModel):
     class_id: int
     title: str = Field(min_length=1, max_length=255)
     video_url: str = Field(min_length=1)
     total_duration_seconds: int = Field(gt=0)
     completion_threshold_pct: float = Field(ge=1, le=100)
+    notes_url: str | None = None
+    mcqs: list[McqItem] = []
 
 class TeacherUpsert(BaseModel):
     school_id: UUID
@@ -183,19 +197,21 @@ def upsert_subscription(req: SubscriptionUpsert):
 def get_videos():
     with with_db_context("admin_role") as cur:
         rows = cur.execute(
-            "SELECT id, class_id, title, video_url, total_duration_seconds, completion_threshold_pct "
+            "SELECT id, class_id, title, video_url, total_duration_seconds, completion_threshold_pct, notes_url, mcqs "
             "FROM videos ORDER BY class_id, title"
         ).fetchall()
     return rows
 
 @router.post("/videos")
 def create_video(req: VideoCreate):
+    mcqs_json = json.dumps([m.model_dump() for m in req.mcqs])
     with with_db_context("admin_role") as cur:
         row = cur.execute("""
-            INSERT INTO videos (class_id, title, video_url, total_duration_seconds, completion_threshold_pct)
-            VALUES (%s, %s, %s, %s, %s)
-            RETURNING id, class_id, title, video_url, total_duration_seconds, completion_threshold_pct
-        """, (req.class_id, req.title.strip(), req.video_url.strip(), req.total_duration_seconds, req.completion_threshold_pct)).fetchone()
+            INSERT INTO videos (class_id, title, video_url, total_duration_seconds, completion_threshold_pct, notes_url, mcqs)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, class_id, title, video_url, total_duration_seconds, completion_threshold_pct, notes_url, mcqs
+        """, (req.class_id, req.title.strip(), req.video_url.strip(), req.total_duration_seconds, req.completion_threshold_pct,
+              req.notes_url.strip() if req.notes_url else None, mcqs_json)).fetchone()
     return row
 
 @router.delete("/videos/{video_id}")

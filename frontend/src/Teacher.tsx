@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useFetch, ErrorBanner, Header } from "./ui";
-import type { TeacherDashboardRow, VideoStatus } from "./types";
+import type { TeacherDashboardRow, VideoStatus, McqItem } from "./types";
 
 // --- Status badge (same styles as Student) ---
 
@@ -21,8 +22,41 @@ function formatTime(seconds: number): string {
     return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+function QuizReviewModal({ mcqs, answers, score, total, onClose }: {
+    mcqs: McqItem[]; answers: number[]; score: number; total: number; onClose: () => void;
+}) {
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+            <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-5 space-y-3" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-slate-900">Quiz Review — {score}/{total}</h3>
+                    <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+                </div>
+                {mcqs.map((m, i) => {
+                    const selected = answers[i];
+                    return (
+                        <div key={i} className="rounded border p-3 space-y-1">
+                            <p className="text-sm font-medium text-slate-900">Q{i + 1}. {m.question}</p>
+                            {m.options.map((opt, oi) => {
+                                const isCorrect = oi === m.correct_index;
+                                const isPicked = oi === selected;
+                                let cls = "text-sm px-2 py-0.5 rounded ";
+                                if (isCorrect) cls += "bg-green-100 text-green-800 font-medium";
+                                else if (isPicked) cls += "bg-red-100 text-red-800";
+                                else cls += "text-slate-600";
+                                return <div key={oi} className={cls}>{isCorrect && "✅ "}{isPicked && !isCorrect && "❌ "}{opt}</div>;
+                            })}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
 export function TeacherDashboard() {
     const { data: rows, loading, error } = useFetch<TeacherDashboardRow[]>("/api/teacher/dashboard");
+    const [reviewCell, setReviewCell] = useState<TeacherDashboardRow | null>(null);
 
     // Pivot: unique students as rows, unique videos as columns
     const students: { id: string; name: string; regno: string }[] = [];
@@ -102,6 +136,14 @@ export function TeacherDashboard() {
                                                         <div className="mt-0.5 text-xs text-slate-500">
                                                             {formatTime(cell.watch_duration_seconds)}
                                                         </div>
+                                                        {cell.quiz_score !== null && (
+                                                            <button
+                                                                className="mt-0.5 text-xs font-medium text-indigo-600 hover:underline"
+                                                                onClick={() => setReviewCell(cell)}
+                                                            >
+                                                                Quiz: {cell.quiz_score}/{cell.quiz_total}
+                                                            </button>
+                                                        )}
                                                     </td>
                                                 );
                                             })}
@@ -116,6 +158,16 @@ export function TeacherDashboard() {
                     </div>
                 )}
             </main>
+
+            {reviewCell && reviewCell.quiz_answers && (
+                <QuizReviewModal
+                    mcqs={reviewCell.mcqs}
+                    answers={reviewCell.quiz_answers}
+                    score={reviewCell.quiz_score!}
+                    total={reviewCell.quiz_total!}
+                    onClose={() => setReviewCell(null)}
+                />
+            )}
         </>
     );
 }
