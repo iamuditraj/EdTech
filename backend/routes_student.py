@@ -14,6 +14,7 @@ class ProgressUpdate(BaseModel):
     watch_seconds: float = Field(ge=0, le=1_000_000)
     position_seconds: float = Field(ge=0, le=1_000_000)
 
+
 class QuizSubmit(BaseModel):
     answers: list[int]
 
@@ -37,13 +38,13 @@ def get_videos(user: dict = student_auth):
     for row in rows:
         mcqs = row["mcqs"] if isinstance(row["mcqs"], list) else json.loads(row["mcqs"]) if row["mcqs"] else []
         if row["quiz_answers"] is not None:
-            # Already attempted — include correct_index + selected_index so student can review
+            # Already attempted -- include correct_index + selected_index so student can review
             answers = row["quiz_answers"] if isinstance(row["quiz_answers"], list) else json.loads(row["quiz_answers"])
             for i, m in enumerate(mcqs):
                 m["selected_index"] = answers[i] if i < len(answers) else None
             row["mcqs"] = mcqs
         else:
-            # Not attempted — strip correct_index so student can't inspect the answer key
+            # Not attempted -- strip correct_index so student can't inspect the answer key
             row["mcqs"] = [{"question": m["question"], "options": m["options"]} for m in mcqs]
     return rows
 
@@ -72,7 +73,7 @@ def submit_quiz(video_id: UUID, req: QuizSubmit, user: dict = student_auth):
         total = len(mcqs)
         answers_json = json.dumps(req.answers)
 
-        # Upsert: insert if no progress row exists, otherwise just update quiz columns
+        # Upsert once: reject if quiz_answers is already set
         row = cur.execute("""
             INSERT INTO video_progress
                 (school_id, class_id, student_id, video_id, status, watch_duration_seconds, last_position_seconds,
@@ -90,8 +91,12 @@ def submit_quiz(video_id: UUID, req: QuizSubmit, user: dict = student_auth):
                 quiz_total = %(total)s,
                 quiz_answers = %(answers)s,
                 updated_at = now()
+            WHERE video_progress.quiz_answers IS NULL
             RETURNING quiz_score, quiz_total
         """, {"video_id": str(video_id), "score": score, "total": total, "answers": answers_json}).fetchone()
+
+        if not row:
+            raise HTTPException(409, "Quiz already submitted.")
     return row
 
 
